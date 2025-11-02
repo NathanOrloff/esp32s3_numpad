@@ -12,12 +12,13 @@
 #include "esp_sleep.h"
 
 #include "numpad.h"
+#include "usb_hid.h"
 
 #define SLEEP_PERIOD 2000000
 
 #define ESP_INTR_FLAG_DEFAULT   0
 
-static const char *TAG = "Numpad";
+static const char *TAG = "NUMPAD MAIN";
 static QueueHandle_t gpio_evt_queue = NULL;
 
 static void gpio_task(void* arg)
@@ -25,7 +26,20 @@ static void gpio_task(void* arg)
     uint16_t keycode;
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &keycode, portMAX_DELAY)) {
-            ESP_LOGI(TAG, "keycode = 0x%x", keycode);
+            // ESP_LOGI(TAG, "keycode = 0x%x", keycode);
+            if (keycode == RELEASE) {
+                app_send_key_released();
+            } else {
+                uint8_t charcode = keycode_to_charcode(keycode);
+                app_send_key(charcode);
+            }
+            ets_delay_us(50000);
+
+            gpio_intr_enable(ROW0);
+            gpio_intr_enable(ROW1);
+            gpio_intr_enable(ROW2);
+            gpio_intr_enable(ROW3);
+            gpio_intr_enable(ROW4);
         }
     }
 }
@@ -54,7 +68,7 @@ static void IRAM_ATTR numpad_interrupt_handler (void* arg) {
     ets_delay_us(10);
 
     // Re-enable interrupt
-    gpio_intr_enable(gpio_num);
+    // gpio_intr_enable(gpio_num);
 }
 
 void numpad_interrupt_init (void) {
@@ -77,6 +91,7 @@ void numpad_interrupt_init (void) {
 void app_main(void)
 {
     create_task_queue();
+    configure_usb_device();
     numpad_init();
     numpad_interrupt_init();
 

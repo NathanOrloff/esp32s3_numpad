@@ -12,6 +12,35 @@
 
 #include "numpad.h"
 
+typedef struct {
+    uint16_t code;
+    uint8_t key_main;
+    uint8_t key_alt;
+} KeyCodeMapping;
+
+const KeyCodeMapping  CODEX[] = { 
+    { 0x108, HID_KEY_NUM_LOCK, NOKEY},  // numlock
+    { 0x104, HID_KEY_SLASH, NOKEY},  // /
+    { 0x102, HID_KEY_KEYPAD_MULTIPLY, NOKEY},  // *
+    { 0x101, HID_KEY_BACKSPACE, NOKEY},  // back space
+    { 0x88, HID_KEY_7, HID_KEY_HOME},  // 7, home
+    { 0x84, HID_KEY_8, HID_KEY_ARROW_UP},  // 8, up
+    { 0x82, HID_KEY_9, HID_KEY_PAGE_UP},  // 9, pg up
+    { 0x81, HID_KEY_MINUS, NOKEY},  // -
+    { 0x48, HID_KEY_4, HID_KEY_ARROW_LEFT},  // 4, left
+    { 0x44, HID_KEY_5, NOKEY},  // 5
+    { 0x42, HID_KEY_6, HID_KEY_ARROW_RIGHT},  // 6, right
+    { 0x41, HID_KEY_KEYPAD_ADD, NOKEY},  // +
+    { 0x28, HID_KEY_1, HID_KEY_END},  // 1, end
+    { 0x24, HID_KEY_2, HID_KEY_ARROW_DOWN},  // 2, down
+    { 0x22, HID_KEY_3, HID_KEY_PAGE_DOWN},  // 3, pg dn
+    { 0x21, HID_KEY_ENTER, NOKEY},  // enter
+    { 0x18, HID_KEY_0, HID_KEY_INSERT},  // 0, ins
+    { 0x14, HID_KEY_0, NOKEY},  // 0
+    { 0x12, HID_KEY_PERIOD, HID_KEY_DELETE},  // ., del
+    { 0x11, HID_KEY_ENTER, NOKEY}  // enter
+};
+
 void set_col_level (uint8_t level) {
     gpio_set_level(COL0, level);
     gpio_set_level(COL1, level);
@@ -148,7 +177,14 @@ uint16_t numpad_get_keycode (void) {
 
 }
 
-// char keycode_to_char (uint8_t keycode) {
-
-// }
+uint8_t keycode_to_charcode (uint8_t keycode) {
+    uint8_t codex_size = sizeof(CODEX) / sizeof(CODEX[0]);
+    uint8_t i;
+    for (i = 0; i < codex_size; i++) {
+        if (keycode == CODEX[i].code) {
+            return CODEX[i].key_main;
+        }
+    }
+    return NOKEY;
+}
 
