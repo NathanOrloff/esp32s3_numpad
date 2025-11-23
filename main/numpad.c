@@ -1,3 +1,4 @@
+// numpad.c
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -5,8 +6,6 @@
 #include <rom/ets_sys.h>
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 
@@ -66,7 +65,6 @@ uint32_t read_row_pins (void) {
 }
 
 void numpad_init (void) {
-    // set cols to input
     gpio_config_t io_conf_out_col = {
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_INPUT,
@@ -76,8 +74,6 @@ void numpad_init (void) {
     };
     gpio_config(&io_conf_out_col);
 
-    // set rows to input with pull-down resistors
-    // interrupt on falling edge
     gpio_config_t io_conf_out_row = {
         .intr_type = GPIO_INTR_POSEDGE,
         .mode = GPIO_MODE_INPUT,
@@ -88,28 +84,32 @@ void numpad_init (void) {
     gpio_config(&io_conf_out_row);
 }
 
-
+/*
+ * Perform a single matrix scan and return a 8-bit-ish keycode where
+ * upper nibble is row and lower nibble is column (same idea as before).
+ * Returns 0xff when no key pressed.
+ *
+ * This function toggles column outputs and reads rows. It's meant to be called
+ * from a task context (not from ISR).
+ */
 uint16_t numpad_get_keycode (void) {
     uint32_t row, col;
     uint16_t keycode = 0;
     uint32_t col_mask = COL_MASK;
     uint8_t i = 0;
 
-    // make columns outputs and drive high
     set_col_direction(GPIO_MODE_OUTPUT);
     set_col_level(HIGH);
-    ets_delay_us(10);
+    ets_delay_us(1000);
 
-    // read all row pins
     row = read_row_pins();
-    ets_printf("row read 1 = 0x%lx\n", row);
 
-    // no key was pressed
     if (row == 0) {
+        set_col_level(LOW);
+        set_col_direction(GPIO_MODE_DISABLE);
         return 0xff;
     }
 
-    // find pressed key
     for (; col_mask > 0; col_mask >>= 1) {
         if (!(col_mask & 1)) {
             i++;
@@ -117,11 +117,11 @@ uint16_t numpad_get_keycode (void) {
         }
 
         col = i;
-        set_col_level(LOW);
-        ets_delay_us(10);
 
+        set_col_level(LOW);
+        ets_delay_us(200);
         gpio_set_level(col, HIGH);
-        ets_delay_us(10);
+        ets_delay_us(200);
 
         row = read_row_pins();
         if (row != 0) {
@@ -131,16 +131,13 @@ uint16_t numpad_get_keycode (void) {
         i++;
     }
 
-    // drive columns low and disable output
     set_col_level(LOW);
     set_col_direction(GPIO_MODE_DISABLE);
 
-    // generate keycode
     if (col_mask == 0) {
         return 0xff;
     }
 
-    // for keycode 4 MSB are row 4 LSB are col
     switch (col) {
         case COL0:
             keycode |= 1;
@@ -173,8 +170,7 @@ uint16_t numpad_get_keycode (void) {
             break;
     }
 
-    return keycode;    
-
+    return keycode;
 }
 
 uint8_t keycode_to_charcode (uint8_t keycode) {
@@ -187,4 +183,3 @@ uint8_t keycode_to_charcode (uint8_t keycode) {
     }
     return NOKEY;
 }
-

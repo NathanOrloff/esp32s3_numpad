@@ -51,7 +51,6 @@ static const uint8_t hid_configuration_descriptor[] = {
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    // We use only one interface and one HID report descriptor, so we can ignore parameter 'instance'
     return hid_report_descriptor;
 }
 
