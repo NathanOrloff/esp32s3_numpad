@@ -27,6 +27,7 @@
 void numpad_init (void);
 uint16_t numpad_get_keycode (void);
 uint8_t keycode_to_charcode (uint8_t keycode);
+void numpad_get_all_keycodes(uint16_t *keycodes, uint8_t *count);
 
 void set_col_level(uint8_t level);
 void set_col_direction (gpio_mode_t mode) ;

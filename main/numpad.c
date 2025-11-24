@@ -1,4 +1,4 @@
-// numpad.c
+// numpad.c - Multi-key support version
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -85,60 +85,14 @@ void numpad_init (void) {
 }
 
 /*
- * Perform a single matrix scan and return a 8-bit-ish keycode where
- * upper nibble is row and lower nibble is column (same idea as before).
- * Returns 0xff when no key pressed.
- *
- * This function toggles column outputs and reads rows. It's meant to be called
- * from a task context (not from ISR).
+ * Generate keycode from row and column indices.
+ * Upper nibble is row, lower nibble is column.
  */
-uint16_t numpad_get_keycode (void) {
-    uint32_t row, col;
+static uint16_t make_keycode(uint32_t row_pin, uint32_t col_pin)
+{
     uint16_t keycode = 0;
-    uint32_t col_mask = COL_MASK;
-    uint8_t i = 0;
 
-    set_col_direction(GPIO_MODE_OUTPUT);
-    set_col_level(HIGH);
-    ets_delay_us(1000);
-
-    row = read_row_pins();
-
-    if (row == 0) {
-        set_col_level(LOW);
-        set_col_direction(GPIO_MODE_DISABLE);
-        return 0xff;
-    }
-
-    for (; col_mask > 0; col_mask >>= 1) {
-        if (!(col_mask & 1)) {
-            i++;
-            continue;
-        }
-
-        col = i;
-
-        set_col_level(LOW);
-        ets_delay_us(200);
-        gpio_set_level(col, HIGH);
-        ets_delay_us(200);
-
-        row = read_row_pins();
-        if (row != 0) {
-            break;
-        }
-
-        i++;
-    }
-
-    set_col_level(LOW);
-    set_col_direction(GPIO_MODE_DISABLE);
-
-    if (col_mask == 0) {
-        return 0xff;
-    }
-
-    switch (col) {
+    switch (col_pin) {
         case COL0:
             keycode |= 1;
             break;
@@ -152,25 +106,88 @@ uint16_t numpad_get_keycode (void) {
             keycode |= (1 << 3);
             break;
     }
-    switch (row) {
-        case (1ULL << ROW0):
+
+    switch (row_pin) {
+        case ROW0:
             keycode |= (1 << 4);
             break;
-        case (1ULL << ROW1):
+        case ROW1:
             keycode |= (1 << (1 + 4));
             break;
-        case (1ULL << ROW2):
+        case ROW2:
             keycode |= (1 << (2 + 4));
             break;
-        case (1ULL << ROW3):
+        case ROW3:
             keycode |= (1 << (3 + 4));
             break;
-        case (1ULL << ROW4):
+        case ROW4:
             keycode |= (1 << (4 + 4));
             break;
     }
-
+    
     return keycode;
+}
+
+/*
+ * NEW FUNCTION: Scan the entire matrix and return ALL pressed keys.
+ * This supports n-key rollover with diodes.
+ * 
+ * Parameters:
+ *   keycodes - array to store found keycodes (must be at least size 20)
+ *   count - pointer to store the number of keys found
+ */
+void numpad_get_all_keycodes(uint16_t *keycodes, uint8_t *count)
+{
+    *count = 0;
+    
+    const uint32_t cols[] = {COL0, COL1, COL2, COL3};
+    const uint32_t rows[] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+    
+    set_col_direction(GPIO_MODE_OUTPUT);
+
+    for (int col_idx = 0; col_idx < 4; col_idx++) {
+        set_col_level(LOW);
+        ets_delay_us(50);
+
+        gpio_set_level(cols[col_idx], HIGH);
+        ets_delay_us(200);
+
+        uint32_t row_state = read_row_pins();
+        
+        for (int row_idx = 0; row_idx < 5; row_idx++) {
+            if (row_state & (1ULL << rows[row_idx])) {
+                uint16_t keycode = make_keycode(rows[row_idx], cols[col_idx]);
+                keycodes[*count] = keycode;
+                (*count)++;
+
+                if (*count >= 20) {
+                    goto cleanup;
+                }
+            }
+        }
+    }
+    
+cleanup:
+    set_col_level(LOW);
+    set_col_direction(GPIO_MODE_DISABLE);
+}
+
+/*
+ * Legacy function: Perform a single matrix scan and return the FIRST keycode found.
+ * Returns 0xff when no key pressed.
+ * Kept for compatibility.
+ */
+uint16_t numpad_get_keycode (void) {
+    uint16_t keycodes[20];
+    uint8_t count;
+    
+    numpad_get_all_keycodes(keycodes, &count);
+    
+    if (count > 0) {
+        return keycodes[0];
+    }
+    
+    return 0xff;
 }
 
 uint8_t keycode_to_charcode (uint8_t keycode) {

@@ -51,6 +51,7 @@ static const uint8_t hid_configuration_descriptor[] = {
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
+    // We use only one interface and one HID report descriptor, so we can ignore parameter 'instance'
     return hid_report_descriptor;
 }
 
@@ -75,21 +76,43 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
 }
 
 /********* Application ***************/
-void app_send_key(uint8_t key)
+
+/**
+ * @brief Send a keyboard report with multiple keys
+ * 
+ * @param keys Array of up to 6 HID keycodes to send simultaneously
+ */
+void app_send_key_array(uint8_t keys[6])
 {
     if (tud_mounted()) {
-        ESP_LOGI(TAG, "Sending Keyboard report - %d", key);
-        uint8_t keycode[6] = {key};
-        tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, 0, keycode);
+        ESP_LOGI(TAG, "Sending Keyboard report - keys: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x", 
+                 keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
+        // modifier byte is 0, then 6 key slots
+        tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, 0, keys);
     }
     else {
         ESP_LOGI(TAG, "TUD not mounted");
     }
 }
 
+/**
+ * @brief Send a single key (legacy function)
+ * 
+ * @param key Single HID keycode to send
+ */
+void app_send_key(uint8_t key)
+{
+    uint8_t keys[6] = {key, 0, 0, 0, 0, 0};
+    app_send_key_array(keys);
+}
+
+/**
+ * @brief Send empty report (all keys released)
+ */
 void app_send_key_released(void)
 {
-    app_send_key(0);
+    uint8_t keys[6] = {0};
+    app_send_key_array(keys);
 }
 
 void configure_usb_device(void)

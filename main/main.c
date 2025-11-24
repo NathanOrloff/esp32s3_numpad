@@ -1,7 +1,8 @@
-// main.c
+// main.c - Multi-key support version
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 #include <inttypes.h>
 #include <rom/ets_sys.h>
 
@@ -17,14 +18,22 @@
 
 #define SLEEP_PERIOD 2000000
 #define ESP_INTR_FLAG_DEFAULT   0
+#define MAX_SIMULTANEOUS_KEYS 6
 
 static const char *TAG = "NUMPAD MAIN";
 
+/*
+ * Queue that receives row events from ISR. ISR sends a uint32_t containing
+ * the GPIO number (ROW pin) that triggered. The FSM task reads this and
+ * performs debounced scanning.
+ */
 static QueueHandle_t gpio_evt_queue = NULL;
 
+/* debounce and scan timing */
 #define DEBOUNCE_MS 10
 #define FSM_POLL_MS 10
 
+/* FSM states */
 typedef enum {
     STATE_IDLE = 0,
     STATE_WAIT_STABLE_PRESS,
@@ -32,7 +41,14 @@ typedef enum {
     STATE_WAIT_STABLE_RELEASE
 } key_state_t;
 
-static uint16_t confirmed_key = 0xff;
+/* Structure to hold multiple pressed keys */
+typedef struct {
+    uint16_t keycodes[MAX_SIMULTANEOUS_KEYS];
+    uint8_t count;
+} pressed_keys_t;
+
+/* keep the last confirmed pressed keys */
+static pressed_keys_t confirmed_keys = {0};
 
 /* ISR: keep it tiny. Send the row pin that triggered to the queue and disable
    that pin's interrupt briefly. The FSM task will re-enable interrupts after it
@@ -50,8 +66,7 @@ static void IRAM_ATTR numpad_interrupt_handler (void* arg) {
     }
 }
 
-/* Creates the queue and installs the simple ISR service. Note: we add the
-   handler for each row here as before. */
+/* Creates the queue and installs the simple ISR service. */
 static void create_task_queue_and_isr(void)
 {
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
@@ -81,14 +96,52 @@ static void set_columns_for_interrupt_detection(void)
     set_col_level(HIGH);
 }
 
+/* Compare two pressed_keys_t structures to see if they're different */
+static bool keys_changed(pressed_keys_t *a, pressed_keys_t *b)
+{
+    if (a->count != b->count) {
+        return true;
+    }
+
+    for (int i = 0; i < a->count; i++) {
+        bool found = false;
+        for (int j = 0; j < b->count; j++) {
+            if (a->keycodes[i] == b->keycodes[j]) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+/* Send HID report with currently pressed keys */
+static void send_key_report(pressed_keys_t *keys)
+{
+    uint8_t hid_keys[6] = {0};
+
+    for (int i = 0; i < keys->count && i < 6; i++) {
+        uint8_t charcode = keycode_to_charcode((uint8_t)keys->keycodes[i]);
+        if (charcode != NOKEY) {
+            hid_keys[i] = charcode;
+        }
+    }
+    
+    app_send_key_array(hid_keys);
+}
+
 /* The keyboard FSM task: receives events from the ISR queue and implements
-   debounce + scanning logic. It uses numpad_get_keycode() to perform an
-   authoritative scan of the matrix (columns toggled inside that function). */
+   debounce + scanning logic. Now supports multiple simultaneous keys. */
 static void keyboard_fsm_task(void* arg)
 {
     (void)arg;
     key_state_t state = STATE_IDLE;
     TickType_t last_transition = 0;
+    pressed_keys_t current_keys = {0};
     uint32_t isr_pin;
 
     for (;;) {
@@ -106,15 +159,13 @@ static void keyboard_fsm_task(void* arg)
 
             case STATE_WAIT_STABLE_PRESS:
                 if ((xTaskGetTickCount() - last_transition) >= pdMS_TO_TICKS(DEBOUNCE_MS)) {
-                    uint16_t keycode = numpad_get_keycode();
-                    if (keycode != 0xff) {
-                        confirmed_key = keycode;
-                        uint8_t charcode = keycode_to_charcode((uint8_t)keycode);
-                        if (charcode != NOKEY) {
-                            app_send_key(charcode);
-                        } else {
-                            ESP_LOGI(TAG, "Unknown mapping for keycode 0x%x", keycode);
-                        }
+                    numpad_get_all_keycodes(&current_keys.keycodes[0], &current_keys.count);
+                    
+                    if (current_keys.count > 0) {
+                        memcpy(&confirmed_keys, &current_keys, sizeof(pressed_keys_t));
+
+                        send_key_report(&confirmed_keys);
+                        
                         state = STATE_PRESSED;
                         set_columns_for_interrupt_detection();
                     } else {
@@ -126,28 +177,35 @@ static void keyboard_fsm_task(void* arg)
                 break;
 
             case STATE_PRESSED:
-                // Poll matrix occasionally to detect release.
                 {
-                    uint16_t keycode = numpad_get_keycode();
-                    if (keycode == 0xff) {
+                    numpad_get_all_keycodes(&current_keys.keycodes[0], &current_keys.count);
+                    
+                    if (current_keys.count == 0) {
                         state = STATE_WAIT_STABLE_RELEASE;
                         last_transition = xTaskGetTickCount();
+                    } else if (keys_changed(&current_keys, &confirmed_keys)) {
+                        memcpy(&confirmed_keys, &current_keys, sizeof(pressed_keys_t));
+                        send_key_report(&confirmed_keys);
                     }
+                    
                     set_columns_for_interrupt_detection();
                 }
                 break;
 
             case STATE_WAIT_STABLE_RELEASE:
                 if ((xTaskGetTickCount() - last_transition) >= pdMS_TO_TICKS(DEBOUNCE_MS)) {
-                    uint16_t keycode = numpad_get_keycode();
-                    if (keycode == 0xff) {
+                    numpad_get_all_keycodes(&current_keys.keycodes[0], &current_keys.count);
+                    
+                    if (current_keys.count == 0) {
+                        confirmed_keys.count = 0;
                         app_send_key_released();
-                        confirmed_key = 0xff;
+                        
                         state = STATE_IDLE;
                         set_columns_for_interrupt_detection();
                         reenable_row_interrupts();
                     } else {
-                        // still pressed; go back to PRESSED
+                        memcpy(&confirmed_keys, &current_keys, sizeof(pressed_keys_t));
+                        send_key_report(&confirmed_keys);
                         state = STATE_PRESSED;
                         set_columns_for_interrupt_detection();
                     }
@@ -155,10 +213,9 @@ static void keyboard_fsm_task(void* arg)
                 break;
         }
 
-        // Always delay at least 1 tick to ensure we yield to other tasks
         TickType_t delay_ticks = pdMS_TO_TICKS(FSM_POLL_MS);
         if (delay_ticks == 0) {
-            delay_ticks = 1; 
+            delay_ticks = 1;
         }
         vTaskDelay(delay_ticks);
     }
@@ -175,6 +232,7 @@ void app_main(void)
     numpad_init();
     numpad_interrupt_init();
 
+    // create keyboard FSM task with moderate priority
     xTaskCreate(keyboard_fsm_task, "keyboard_fsm", 4096, NULL, 5, NULL);
 
     for (;;) {
